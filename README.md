@@ -1,11 +1,21 @@
-# gaussian-vrmHackathon20251101
-2025/11/01に行われたgaussian-vrmハッカソンの作品です。
+# gaussian-vrm Hackathon 2025/11/01
 
-gaussian-vrmをcloneしてきたrootにフォルダ事おいてください。
-https://github.com/naruya/gaussian-vrm
+2025年11月1日に開催された **gaussian-vrm ハッカソン** の作品です。
 
-root
-├project/
+---
+
+## 📦 セットアップ
+
+以下のリポジトリをクローンし、`root` ディレクトリにこのフォルダごと配置してください。
+
+🔗 [naruya/gaussian-vrm (GitHub)](https://github.com/naruya/gaussian-vrm)
+
+---
+
+## 📁 ディレクトリ構成
+<pre>
+root/
+.project/
 ├─ index_all.html
 ├─ sceneManager.js
 ├─ audioManager.js
@@ -17,3 +27,11 @@ root
     ├─ Idle.fbx
     ├─ Breathing.fbx
     └─ etc...
+</pre>
+---
+
+## 💡 メモ
+
+- `gaussian-vrm` の clone 先がルートディレクトリになります。  
+- `project/` 以下に実装ファイルを配置してください。
+- `.gvrm` モデルや `.fbx` モーションは `assets/` 内に格納します。
