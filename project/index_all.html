@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM All-in-One Controller</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; color: #0f0; font-family: monospace; }
+    #status {
+      position: fixed;
+      top: 10px; left: 10px;
+      background: rgba(0,0,0,0.6);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #0ff;
+      white-space: pre;
+      z-index: 100;
+    }
+    #uiPanel {
+      position: fixed;
+      bottom: 10px; left: 10px;
+      background: rgba(0,0,0,0.6);
+      color: #0f0;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="status">⏳ Loading...</div>
+  <div id="uiPanel">
+    <div>Effect Mode: <span id="mode">wave</span></div>
+    <div>freq: <span id="freq">0</span></div>
+    <div>speed: <span id="speed">0</span></div>
+    <div>amp: <span id="amp">0</span></div>
+    <div id="postFxLabel">PostFX: none</div>
+  </div>
+    <!-- === AUDIO LEVEL DISPLAY === -->
+    <div id="audioLevels" style="
+    position: fixed;
+    right: 10px;
+    bottom: 10px;
+    background: rgba(0,0,0,0.6);
+    color: #00ffcc;
+    font-family: monospace;
+    font-size: 14px;
+    line-height: 1.4;
+    padding: 8px 12px;
+    border-radius: 6px;
+    z-index: 200;
+    ">
+    <div><b>🎧 Audio Bands</b></div>
+    <div>Bass: <span id="bassVal">0.00</span></div>
+    <div>Mid: <span id="midVal">0.00</span></div>
+    <div>High: <span id="highVal">0.00</span></div>
+    </div>
+
+  <!-- === three.js + dependencies === -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <!-- === modules === -->
+  <script type="module">
+    import * as THREE from "three";
+    import { SceneManager } from "./sceneManager.js";
+    import { ModelEffectController } from "./ModelEffectController.js";
+    import { PostEffectController } from "./PostEffectController.js";
+    import { AudioInputManager } from "./audioManager.js";
+
+    const status = document.getElementById("status");
+    const canvas = document.getElementById("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+    // === Managers ===
+    const sceneManager = new SceneManager(renderer, scene, camera, status);
+    const modelEffectUI = {
+      mode: document.getElementById("mode"),
+      freq: document.getElementById("freq"),
+      speed: document.getElementById("speed"),
+      amp: document.getElementById("amp")
+    };
+    const modelEffectController = new ModelEffectController(scene, camera, renderer, modelEffectUI);
+    const postFxLabel = document.getElementById("postFxLabel");
+    const postEffectController = new PostEffectController(renderer, scene, camera, postFxLabel);
+    const audioInput = new AudioInputManager();
+
+
+    // === 音声入力設定 ===
+    await audioInput.initMic(); // マイク入力を使う場合はこちら
+    // await audioInput.initMp3("../assets/sample.mp3"); // MP3再生を使う場合はこちら
+
+    // === 初期モデルロード ===
+    const initialModel = await sceneManager.fullyPreloadModel(4, "../assets/Idle.fbx");
+    if (initialModel.character?.currentVrm?.scene) scene.add(initialModel.character.currentVrm.scene);
+    if (initialModel.gs?.splatMesh) scene.add(initialModel.gs.splatMesh);
+    sceneManager.currentGvrm = initialModel;
+    sceneManager.currentModelIndex = 4;
+    status.textContent = "✅ sample5.gvrm loaded";
+    modelEffectController.attachGvrm(sceneManager.currentGvrm);
+    sceneManager.switchAnimation(7);
+    // SceneManager に ModelEffectController を登録
+    sceneManager.setModelEffectController(modelEffectController);
+    sceneManager.setPostEffectController(postEffectController);
+
+    // MIDI初期化
+    await sceneManager.initMIDI();
+
+    // === ウィンドウリサイズ対応 ===
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      postEffectController.resize(window.innerWidth, window.innerHeight);
+    });
+
+
+    // === 描画ループ ===
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+        const { bass, mid, high } = audioInput.getFrequencyBands();
+        const delta = clock.getDelta();
+      sceneManager.update(delta);
+      modelEffectController.update(performance.now(), { bass, mid, high });
+    //   console.log(`Bass: ${bass.toFixed(3)} Mid: ${mid.toFixed(3)} High: ${high.toFixed(3)}`);
+      postEffectController.render(delta);
+
+        // === 右下表示更新 ===
+        document.getElementById("bassVal").textContent = bass.toFixed(2);
+        document.getElementById("midVal").textContent = mid.toFixed(2);
+        document.getElementById("highVal").textContent = high.toFixed(2);
+
+    });
+  </script>
+</body>
+</html>
