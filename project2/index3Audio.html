@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM sample5 viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+<script type="module">
+  import * as THREE from 'three';
+  import { GVRM } from 'gvrm';
+  import { AudioInputManager } from './audioManager.js';
+
+  const canvas = document.getElementById('canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+  camera.position.set(0, 0.4, 1.5);
+
+  const gvrm = await GVRM.load('../assets/sample5.gvrm', scene, camera, renderer);
+  await gvrm.changeFBX('../assets/Idle.fbx');
+  console.log("✅ GVRM loaded:", gvrm);
+
+  const audioInput = new AudioInputManager();
+  // await audioInput.initMic();
+  await audioInput.initMp3('../assets/sample.mp3'); 
+
+  renderer.setAnimationLoop(() => {
+  const level = audioInput.getAudioLevel();      // 全体音量
+  const { bass, mid, high } = audioInput.getFrequencyBands(); // 各周波数帯
+
+  console.log(
+    `Audio Level: ${level.toFixed(3)} | Bass: ${bass.toFixed(3)} Mid: ${mid.toFixed(3)} High: ${high.toFixed(3)}`
+  );
+
+  // モデルエフェクト例：低音に合わせて波を強く
+  const gs = gvrm.gs;
+  if (gs && gs.splatMesh) {
+    const baseData = gs.splatMesh.splatDataTextures?.baseData;
+    const cov = baseData?.covariances;
+    const base0 = gs.covariances0;
+    if (cov && base0) {
+      const amp = 1.0 + mid * 10.0; // ←低音のみに反応
+      for (let i = 0; i < cov.length; i++) cov[i] = base0[i] * amp;
+      gs.splatMesh.updateDataTexturesFromBaseData(0, gs.splatCount - 1);
+    }
+  }
+
+  gvrm.update();
+  renderer.render(scene, camera);
+});
+</script>
+
+</body>
+</html>

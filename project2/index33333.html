@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM + nanoPAD2 Scene Switch</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: monospace; }
+    #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+    #status {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.6);
+      color: #00ffcc;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 14px;
+      z-index: 100;
+      white-space: pre;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">⏳ Loading sample5.gvrm ...</div>
+  <canvas id="canvas"></canvas>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GVRM } from 'gvrm';
+
+    const status = document.getElementById('status');
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+    const gvrmFiles = [
+      "sample1.gvrm",
+      "sample2.gvrm",
+      "sample3.gvrm",
+      "sample4.gvrm",
+      "sample5.gvrm",
+      "sample6.gvrm",
+      "sample7.gvrm",
+      "sample8.gvrm",
+      "sample9.gvrm"
+    ];
+
+    const animations = [
+      "Idle.fbx",
+      "Breathing.fbx",
+      "Walking.fbx",
+      "Chicken Dance.fbx",
+      "Warrior.fbx"
+    ];
+
+    const idleFBX = "../assets/Idle.fbx";
+    let currentGvrm = null;
+    let isSwitching = false;
+    let padMode = 0; // 0=モデル, 1=アニメ
+    let currentScene = 1;
+    let currentModelIndex = -1;
+
+    function showStatus(text, color = "#00ffcc") {
+      status.style.color = color;
+      status.textContent = text;
+    }
+
+    // SCENE判定（nanoPAD2のノート番号から）
+    function detectSceneFromNote(note) {
+      if (note >= 36 && note < 52) return 1;
+      if (note >= 52 && note < 68) return 2;
+      if (note >= 68 && note < 84) return 3;
+      if (note >= 84 && note < 100) return 4;
+      return 0;
+    }
+
+    // -----------------------------------------------------------
+    // fullyPreloadModel
+    // モデルとアニメーションの両方をロードする
+    // -----------------------------------------------------------
+    async function fullyPreloadModel(index, fbxPath = idleFBX) {
+        const file = gvrmFiles[index];
+        showStatus(`⏳ Loading ${file} ...`);
+        console.log("🔄 Preloading:", file);
+
+        const tempScene = new THREE.Scene();
+        const model = await GVRM.load(`../assets/${file}`, tempScene, camera, renderer);
+
+        // 🔹 モデルロード完了後に指定FBXを読み込み
+        await model.changeFBX(fbxPath);
+        console.log("fullyPreloadModel fbxPath:", fbxPath);
+
+        // 🔹 再生位置を0から開始
+        const action = model.character?.currentAction;
+        if (action) {
+            action.play();
+            action.time = 0;
+        }
+
+        // 🔹 状態保持
+        model.currentFbxPath = fbxPath;
+
+        return model;
+    }
+
+
+    async function switchModel(index) {
+        if (isSwitching) return;
+
+        if( index === currentModelIndex ) {
+            console.log("⚠️ 同じモデルが選択されました:", gvrmFiles[index]);
+            isSwitching = false;
+            return;
+        }
+        isSwitching = true;
+
+        const file = gvrmFiles[index];
+        showStatus(`🔄 Loading ${file} ...`);
+
+        // 🔹 現在のアニメーション状態を保持
+        let currentFBX = idleFBX;
+        let currentTime = 0;
+        let oldMixer = null;
+        let oldAction = null;
+
+        if (currentGvrm?.currentFbxPath) {
+            currentFBX = currentGvrm.currentFbxPath;
+            oldMixer = currentGvrm.character?.currentMixer;
+            oldAction = currentGvrm.character?.currentAction;
+            if (oldAction) currentTime = oldAction.time || 0;
+        }
+
+        // 🔹 新モデルをロード（アニメーションも同時に）
+        const newModel = await fullyPreloadModel(index, currentFBX);
+
+        // 🔹 再生位置を復元
+        const newAction = newModel.character?.currentAction;
+        if (newAction) {
+            newAction.play();
+            newAction.time = currentTime;
+        }
+
+        // 🔹 古いモデルを除去し、クロスフェード
+        if (currentGvrm) {
+            if (oldMixer && oldAction && newAction) {
+            try {
+                oldAction.crossFadeTo(newAction, 0.3, true);
+            } catch (e) {
+                console.warn("⚠️ crossFadeTo failed:", e);
+            }
+            }
+            scene.remove(currentGvrm.character?.currentVrm?.scene);
+            scene.remove(currentGvrm.gs?.splatMesh);
+        }
+
+        // 🔹 新モデル追加
+        if (newModel.character?.currentVrm?.scene) scene.add(newModel.character.currentVrm.scene);
+        if (newModel.gs?.splatMesh) scene.add(newModel.gs.splatMesh);
+        currentGvrm = newModel;
+
+        showStatus(
+            `✅ Loaded ${file}\n🎞 ${currentFBX.split('/').pop()} (continued)\n🎛 SCENE ${currentScene} [MODEL MODE]`,
+            "#00ff88"
+        );
+
+        isSwitching = false;
+        currentModelIndex = index;
+    }
+
+
+
+
+    async function switchAnimation(index) {
+      if (!currentGvrm) return;
+      const fbx = "../assets/" + animations[index];
+      showStatus(`🎞 Changing animation: ${animations[index]}\n🎛 SCENE ${currentScene} [ANIM MODE]`);
+      await currentGvrm.changeFBX(fbx);
+      console.log("switchAnimationfbxPath:", fbx);
+      currentGvrm.currentFbxPath = fbx;
+    }
+
+    // === nanoPAD2 入力 ===
+    async function handlePadInput(note, value) {
+      if (value === 0) return;
+
+      const sceneNum = detectSceneFromNote(note);
+      if (sceneNum === 0) return;
+      currentScene = sceneNum;
+      padMode = sceneNum % 2 === 1 ? 0 : 1;
+
+      if (padMode === 0) {
+        const base = sceneNum === 1 ? 36 : 68;
+        const index = (note - base) % gvrmFiles.length;
+        switchModel(index);
+      } else {
+        const base = sceneNum === 2 ? 52 : 84;
+        const index = (note - base) % animations.length;
+        switchAnimation(index);
+      }
+    }
+
+    async function initMIDI() {
+      if (!navigator.requestMIDIAccess) {
+        showStatus("⚠️ MIDI not supported", "#ff4444");
+        return;
+      }
+
+      const midiAccess = await navigator.requestMIDIAccess();
+      midiAccess.inputs.forEach((input) => {
+        console.log("🎛 Connected:", input.name);
+        input.onmidimessage = (msg) => {
+          const [status, note, value] = msg.data;
+          if (status === 144 && value > 0) handlePadInput(note, value);
+        };
+      });
+    }
+
+    // === 初期モデル sample5 ===
+    const initialModel = await fullyPreloadModel(4);
+    scene.add(initialModel.character?.currentVrm?.scene);
+    scene.add(initialModel.gs?.splatMesh);
+    currentGvrm = initialModel;
+    showStatus("✅ Loaded sample5.gvrm\n🎛 SCENE 1 [MODEL MODE]", "#00ff88");
+
+    initMIDI();
+
+    // === 描画ループ ===
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const delta = clock.getDelta();
+      if (currentGvrm) {
+        const mixer = currentGvrm.character?.currentMixer;
+        // if (mixer) mixer.update(delta);
+        currentGvrm.update(delta);
+      }
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>KORG nano Series MIDI Monitor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html,body{margin:0;height:100%;background:#111;color:#eee;font:14px monospace;}
+  #wrap{max-width:1000px;margin:16px auto;padding:0 12px;}
+  h1{font-size:18px;margin:0 0 12px;}
+  .device{background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:10px;margin-top:10px;}
+  .ok{color:#8ef58e}
+  .warn{color:#ffb86b}
+  .err{color:#ff6b6b}
+  .muted{opacity:.7}
+  table{width:100%;border-collapse:collapse;margin-top:4px}
+  th,td{border-bottom:1px solid #333;padding:4px 6px;text-align:left}
+  .bar{height:6px;background:#333;border-radius:4px;overflow:hidden}
+  .bar>span{display:block;height:100%;background:#4fc3f7}
+  #log{max-height:240px;overflow:auto;background:#000;border:1px solid #333;border-radius:6px;padding:8px;margin-top:6px;font-size:12px}
+</style>
+</head>
+<body>
+<div id="wrap">
+<h1>KORG nanoKONTROL2 + nanoKEY2 + nanoPAD2 Monitor</h1>
+<div id="status" class="warn">initializing MIDI...</div>
+<div id="devices"></div>
+<div id="log"></div>
+</div>
+
+<script>
+(async function(){
+  const statusEl = document.getElementById("status");
+  const devicesEl = document.getElementById("devices");
+  const logEl = document.getElementById("log");
+
+  function log(msg){
+    const line = document.createElement("div");
+    line.textContent = msg;
+    logEl.appendChild(line);
+    while (logEl.children.length > 300) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  if (!("requestMIDIAccess" in navigator)){
+    statusEl.textContent = "Web MIDI API not supported";
+    statusEl.className = "err";
+    return;
+  }
+
+  let midi = null;
+  try{
+    midi = await navigator.requestMIDIAccess({ sysex:false });
+    statusEl.textContent = "MIDI ready";
+    statusEl.className = "ok";
+  }catch(e){
+    statusEl.textContent = "MIDI init failed";
+    statusEl.className = "err";
+    log("requestMIDIAccess failed");
+    return;
+  }
+
+  // containers per device
+  const deviceBoxes = new Map();
+
+  function makeDeviceBox(input){
+    const div = document.createElement("div");
+    div.className = "device";
+    div.innerHTML = `
+      <b>${input.name}</b><br/>
+      <table>
+        <thead><tr><th>Type</th><th>Ch</th><th>Data1</th><th>Data2</th><th>Norm</th><th width="50%">bar</th></tr></thead>
+        <tbody></tbody>
+      </table>`;
+    const tbody = div.querySelector("tbody");
+    devicesEl.appendChild(div);
+    deviceBoxes.set(input.id, {div, tbody, data:new Map()});
+    return deviceBoxes.get(input.id);
+  }
+
+  function updateRow(box, key, row){
+    const {tbody,data} = box;
+    if (!data.has(key)){
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${row.type}</td><td>${row.ch}</td><td>${row.d1}</td><td>${row.d2}</td><td>${row.norm}</td>
+        <td><div class="bar"><span style="width:${(row.d2/127*100).toFixed(1)}%"></span></div></td>`;
+      tbody.appendChild(tr);
+      data.set(key,tr);
+    }else{
+      const tr = data.get(key);
+      tr.children[2].textContent = row.d1;
+      tr.children[3].textContent = row.d2;
+      tr.children[4].textContent = row.norm;
+      tr.children[5].firstChild.firstChild.style.width = (row.d2/127*100).toFixed(1)+"%";
+    }
+  }
+
+  function onMIDIMessage(e,input){
+    const [status,d1,d2] = e.data;
+    const type = status & 0xF0;
+    const ch = (status & 0x0F)+1;
+    let typeName="";
+    if (type===0xB0) typeName="CC";
+    else if (type===0x90) typeName="NoteOn";
+    else if (type===0x80) typeName="NoteOff";
+    else if (type===0xE0) typeName="PitchBend";
+    else typeName="Other";
+
+    const norm = (d2/127).toFixed(3);
+    log(`${input.name}: ${typeName} ch=${ch} d1=${d1} d2=${d2}`);
+
+    const box = deviceBoxes.get(input.id);
+    if (!box) return;
+    const key = typeName+"_"+d1;
+    updateRow(box,key,{type:typeName,ch,d1,d2,norm});
+  }
+
+  for (const input of midi.inputs.values()){
+    const name = input.name || "unknown";
+    if (name.match(/nano/i)){ // only KORG nano series
+      const box = makeDeviceBox(input);
+      input.onmidimessage = (e)=>onMIDIMessage(e,input);
+      log("listening: "+name);
+    }else{
+      log("skipped: "+name);
+    }
+  }
+
+  if (deviceBoxes.size===0){
+    statusEl.textContent = "No KORG nano devices detected";
+    statusEl.className = "warn";
+  }else{
+    statusEl.textContent = deviceBoxes.size + " device(s) active";
+    statusEl.className = "ok";
+  }
+})();
+</script>
+</body>
+</html>

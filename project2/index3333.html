@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM Model Switch (nanoPAD2 + Status)</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: monospace; }
+    #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+    #status {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.5);
+      color: #00ffcc;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 14px;
+      z-index: 100;
+      pointer-events: none;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">⏳ Loading sample5.gvrm ...</div>
+  <canvas id="canvas"></canvas>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GVRM } from 'gvrm';
+
+    const status = document.getElementById('status');
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+    // === モデル一覧 ===
+    const gvrmFiles = [
+      "sample1.gvrm",
+      "sample2.gvrm",
+      "sample3.gvrm",
+      "sample4.gvrm",
+      "sample5.gvrm",
+      "sample6.gvrm",
+      "sample7.gvrm",
+      "sample8.gvrm",
+      "sample9.gvrm"
+    ];
+    const idleFBX = "../assets/Idle.fbx";
+
+    let currentGvrm = null;
+    let isSwitching = false;
+
+    // ============================================================
+    // ステータス表示関数
+    // ============================================================
+    function showStatus(text, color = "#00ffcc") {
+      status.style.color = color;
+      status.textContent = text;
+    }
+
+    // ============================================================
+    // モデルを事前に読み込む（非表示で）
+    // ============================================================
+    async function fullyPreloadModel(index, isInitial = false) {
+      const file = gvrmFiles[index];
+      showStatus(`⏳ Loading ${file} ...`);
+      console.log("🔄 Preloading hidden:", file);
+
+      const tempScene = new THREE.Scene();
+      const model = await GVRM.load(`../assets/${file}`, tempScene, camera, renderer);
+
+      // 初回以外は非表示（プリロード用）
+      if (!isInitial && model.gs?.splatMesh) model.gs.splatMesh.visible = false;
+
+      await model.changeFBX(idleFBX);
+      console.log("🎞 FBX Loaded:", file);
+
+      model.update(0.016);
+      return model;
+    }
+
+    // ============================================================
+    // モデル切り替え
+    // ============================================================
+    async function switchModel(index) {
+      if (isSwitching) return;
+      isSwitching = true;
+
+      const file = gvrmFiles[index];
+      showStatus(`🔄 Loading ${file} ...`);
+      console.log("✨ Switching to model:", file);
+
+      // 新モデルをロード（非同期）
+      const newModel = await fullyPreloadModel(index);
+
+      // アニメーションMixer確認
+      console.log("Mixer:", newModel.character?.currentMixer,
+                  "Action:", newModel.character?.currentAction);
+
+      // 現在モデルを削除
+      if (currentGvrm) {
+        scene.remove(currentGvrm.character?.currentVrm?.scene);
+        scene.remove(currentGvrm.gs?.splatMesh);
+        console.log("🗑 Removed previous model");
+      }
+
+      // 新モデルをシーンに追加
+      if (newModel.character?.currentVrm?.scene) {
+        newModel.character.currentVrm.scene.visible = true;
+        scene.add(newModel.character.currentVrm.scene);
+      }
+      if (newModel.gs?.splatMesh) {
+        newModel.gs.splatMesh.visible = true;
+        scene.add(newModel.gs.splatMesh);
+      }
+
+      currentGvrm = newModel;
+      showStatus(`✅ Loaded ${file}`, "#00ff88");
+      isSwitching = false;
+    }
+
+    // ============================================================
+    // 初回モデル (sample5)
+    // ============================================================
+    const initialIndex = 4; // sample5.gvrm
+    const initialModel = await fullyPreloadModel(initialIndex, true);
+    scene.add(initialModel.character?.currentVrm?.scene);
+    scene.add(initialModel.gs?.splatMesh);
+    currentGvrm = initialModel;
+    showStatus("✅ Loaded sample5.gvrm", "#00ff88");
+
+    // ============================================================
+    // nanoPAD2 入力でモデル切替
+    // ============================================================
+    async function initMIDI() {
+      if (!navigator.requestMIDIAccess) {
+        showStatus("⚠️ MIDI not supported", "#ff4444");
+        return;
+      }
+      const midiAccess = await navigator.requestMIDIAccess();
+      midiAccess.inputs.forEach((input) => {
+        console.log("🎛 Connected:", input.name);
+        input.onmidimessage = (msg) => {
+          const [status, note, value] = msg.data;
+          if (status === 144 && value > 0) {
+            const index = note % gvrmFiles.length;
+            switchModel(index);
+          }
+        };
+      });
+    }
+    initMIDI();
+
+    // ============================================================
+    // 描画ループ
+    // ============================================================
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const delta = clock.getDelta();
+
+      if (currentGvrm) {
+        const mixer = currentGvrm.character?.currentMixer;
+        // if (mixer) mixer.update(delta);
+        currentGvrm.update(delta);
+      }
+
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>

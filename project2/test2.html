@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>マイクテスト</title>
+</head>
+<body>
+  <h1>マイクテスト</h1>
+  <button onclick="startAudio()">音声取得</button>
+  <button onclick="startMicTest()">録音開始</button>
+  <button onclick="stopMicTest()">音声確認</button><br>
+  <audio id="playback_mictest" controls></audio>
+</body>
+<script>
+  // 録音の準備
+  let audioStream = null;
+  let micTestStream =  null;
+  let micTestRecorder =  null;
+  let micBlobUrl = null;
+  let micTestChunks = [];
+  const playbackMicTest =  document.getElementById('playback_mictest');
+  // -- 音声の取得 --
+  function startAudio() {
+    if (!audioStream){
+      // getUserMediaはpromise を返す
+      navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: true
+      })
+      .then(function (audio) { // promiseのresultをaudioStreamに格納
+        audioStream = audio;
+      })
+      .catch(function (error) { // error
+        console.error('mediaDevice.getUserMedia() error:', error);
+        return;
+      });
+    }
+  }
+  // -- 録音開始 --
+  function startMicTest() {
+    micTestStream = new MediaStream();
+    micTestStream.addTrack(audioStream.getAudioTracks()[0]);
+    const micTestOptions = {
+      mimeType : 'audio/webm; codecs=opus'
+    };
+    micTestRecorder = new MediaRecorder(micTestStream, micTestOptions);
+    micTestChunks = []; // 格納場所をクリア
+    // 一定間隔で録音が区切られて、データが渡される。
+    micTestRecorder.ondataavailable = function(evt) {
+      console.log("type=" + evt.data.type + " size=" + evt.data.size);
+      micTestChunks.push(evt.data);
+    };
+    micTestRecorder.start(1000);
+    console.log('start mic test');
+  }
+  // -- 音声の確認 --
+  function stopMicTest() {
+    if (micTestRecorder) {
+      micTestRecorder.stop();
+      console.log("stop mic test");
+    }
+    micTestRecorder.onstop = function(evt) {
+      console.log('micTestRecorder.onstop(), so playback');
+      micTestRecorder = null;
+      playMicTest();
+    };
+
+    // マイクテスト再生
+    function playMicTest() {
+      // Blobの作成
+      const micTestBlob = new Blob(micTestChunks, { type: "audio/webm" });
+      // 再生できるようにURLを生成
+      micBlobUrl = window.URL.createObjectURL(micTestBlob);
+      if (micBlobUrl){
+        playbackMicTest.src = micBlobUrl;
+        // 再生終了時
+        playbackMicTest.onended = function() {
+          playbackMicTest.pause();
+          playbackMicTest.src = "";
+        };
+        // 再生
+        playbackMicTest.play();
+      }
+    };
+  }
+</script>
+</html>

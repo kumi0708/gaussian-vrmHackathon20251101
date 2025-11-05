@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM All-in-One Demo</title>
+  <style>
+    html, body { margin:0; padding:0; background:#000; overflow:hidden; }
+    #canvas { position:fixed; inset:0; }
+    #hud {
+      position: fixed; top:10px; left:10px;
+      background: rgba(0,0,0,0.6); color:#0f0; font:12px/1.4 monospace;
+      padding:10px 12px; border-radius:6px; white-space:pre; pointer-events:none;
+      min-width: 280px;
+    }
+    #barWrap { width:240px; height:6px; background:#222; margin-top:6px; }
+    #bar     { height:6px; background:#0f0; width:0%; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="hud">
+    status: init
+    <div id="barWrap"><div id="bar"></div></div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import SceneManager from "./sceneManager.js";
+    import ModelEffectController from "./ModelEffectController.js";
+    import PostEffectController from "./postEffectController.js";
+    import { AudioInputManager } from './audioManager.js';
+    import MidiRouter from "./midiRouter.js";
+
+    // ---------- basic three ----------
+    const canvas = document.getElementById("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      postFX?.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ---------- UI ----------
+    const hud = document.getElementById("hud");
+    const bar = document.getElementById("bar");
+    const setStatus = (t) => { hud.firstChild.textContent = t; };
+    const setLevel  = (v) => { bar.style.width = Math.round(240 * v) + "px"; };
+
+    // ---------- catalogs ----------
+    const gvrmFiles = [
+      "sample1.gvrm","sample2.gvrm","sample3.gvrm","sample4.gvrm","sample5.gvrm",
+      "sample6.gvrm","sample7.gvrm","sample8.gvrm","sample9.gvrm"
+    ];
+    const fbxFiles = ["Idle.fbx","Breathing.fbx","Walking.fbx","Chicken Dance.fbx","Warrior.fbx"];
+
+    // ---------- subsystems ----------
+    const sceneMgr = new SceneManager(scene, camera, renderer, {
+      gvrmFiles, fbxFiles, initialModelIndex: 4, initialFbx: "Idle.fbx",
+      onStatus: setStatus
+    });
+    await sceneMgr.init(); // 初回 sample5 を非同期プリロードしてシームレスに表示
+
+    const postFX = new PostEffectController(renderer, scene, camera);
+    postFX.init(); // composer 構築
+
+    const modelFX = new ModelEffectController(() => sceneMgr.getGS());
+    modelFX.setAll({
+      waveFreq: 15, waveSpeed: 6, waveAmp: 3,
+      noiseAmp: 0.0, noiseFreq: 12.0,
+      breathAmp: 0.0, breathSpeed: 0.2
+    });
+
+    const audioInput = new AudioInputManager({ onLog: (t)=>console.log(t) });
+    // await audioInput.initMic(); // マイク優先。mp3使うなら audioInput.loadAndPlay("../assets/sample.mp3")
+    await audioInput.loadAndPlay("../assets/sample.mp3");
+
+    // ---------- MIDI routing ----------
+    const midi = new MidiRouter({
+      onNanoPAD: (evt) => sceneMgr.handlePad(evt),                 // モデル/アニメ切替
+      onNanoKEY: (evt) => postFX.handleKEY(evt),                   // 画面エフェクト切替
+      onNanoKONTROL: (evt) => modelFX.handleKONTROL(evt)           // モデルエフェクト調整
+    });
+    await midi.init();
+
+    // ---------- loop ----------
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const dt = clock.getDelta();
+
+      // audio
+      const level = audioInput.getAudioLevel();       // 0..1
+      const bands = audioInput.getBands();            // {bass, mid, high}
+      setLevel(level);
+
+      // audio drives model effects a bit
+      modelFX.audioMod({ level, bass: bands.bass });
+
+      // update subsystems
+      sceneMgr.update(dt);
+      modelFX.update(performance.now() * 0.001);
+      postFX.render(); // composer 経由で描画
+    });
+  </script>
+</body>
+</html>

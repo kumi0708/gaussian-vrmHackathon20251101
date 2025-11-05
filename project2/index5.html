@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM + Mic Reactive Raster</title>
+  <style>
+    html, body { margin:0; height:100%; overflow:hidden; background:#000; }
+    #ui {
+      position:fixed; left:10px; top:10px; z-index:10; color:#fff;
+      font:12px/1.4 monospace; background:rgba(0,0,0,.4); padding:8px 10px; border-radius:6px;
+    }
+    #ui button { margin-right:6px; }
+  </style>
+
+  <!-- Importmap: CDN を利用（ローカルサーバで開いてください） -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="ui">
+    <div>Input: <b id="modeLabel">mic</b></div>
+    <div>rms: <span id="rmsLabel">0.0000</span></div>
+    <div>hint: click the page once if no motion</div>
+    <div style="margin-top:6px">
+      <button id="useMicBtn">use mic</button>
+      <button id="useMp3Btn">use mp3</button>
+    </div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { GVRM } from "gvrm";
+
+    // ========= basic three =========
+    const canvas   = document.getElementById("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+
+    const scene  = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.6);
+
+    window.addEventListener("resize", () => {
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // ========= load GVRM =========
+    const gvrm = await GVRM.load("../assets/sample5.gvrm", scene, camera, renderer);
+    await gvrm.changeFBX("../assets/Idle.fbx");
+    console.log("[DEBUG] GVRM loaded");
+
+    // ========= audio input (mic / mp3) =========
+    const rmsLabel  = document.getElementById("rmsLabel");
+    const modeLabel = document.getElementById("modeLabel");
+    const useMicBtn = document.getElementById("useMicBtn");
+    const useMp3Btn = document.getElementById("useMp3Btn");
+
+    const A = {
+      ctx: null,
+      analyser: null,
+      bufF: null,
+      bufB: null,
+      rms: 0.0,
+      mode: "mic",
+      element: null, // for mp3
+    };
+
+    async function ensureCtx() {
+      if (A.ctx) return A.ctx;
+      A.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      return A.ctx;
+    }
+
+    async function useMic() {
+      A.mode = "mic";
+      modeLabel.textContent = "mic";
+      const ctx = await ensureCtx();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 48000, channelCount: 1, echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+      });
+      const src = ctx.createMediaStreamSource(stream);
+      setupAnalyser(src);
+      console.log("[DEBUG] mic started");
+    }
+
+    async function useMp3() {
+      A.mode = "mp3";
+      modeLabel.textContent = "mp3";
+      const ctx = await ensureCtx();
+      // ここは任意の mp3 に差し替え可能
+      if (!A.element) {
+        A.element = new Audio("../assets/test.mp3");
+        A.element.loop = true;
+        A.element.crossOrigin = "anonymous";
+      }
+      const srcNode = ctx.createMediaElementSource(A.element);
+      setupAnalyser(srcNode);
+      await ctx.resume();
+      await A.element.play().catch(()=>{});
+      console.log("[DEBUG] mp3 started");
+    }
+
+    function setupAnalyser(srcNode) {
+      const ctx = A.ctx;
+      if (A.analyser) A.analyser.disconnect();
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      srcNode.connect(analyser);
+      analyser.connect(ctx.destination); // 小音量でスピーカーに回したくないなら切ってOK
+
+      A.analyser = analyser;
+      A.bufF = new Float32Array(analyser.fftSize);
+      A.bufB = new Uint8Array(analyser.fftSize);
+    }
+
+    // 初期はマイク
+    await useMic();
+
+    // クリックで AudioContext を必ず resume
+    window.addEventListener("click", async () => {
+      if (A.ctx && A.ctx.state === "suspended") {
+        await A.ctx.resume();
+        console.log("[DEBUG] audio context resumed by click");
+      }
+    });
+
+    useMicBtn.onclick = () => useMic();
+    useMp3Btn.onclick = () => useMp3();
+
+    // ========= compute RMS each frame =========
+    function updateRMS() {
+      const an = A.analyser; if (!an) return;
+      // Intel Smart Sound などで float が無音になる場合があるため byte を優先
+      an.getByteTimeDomainData(A.bufB);
+      let sum = 0;
+      for (let i=0; i<A.bufB.length; i++) {
+        const v = (A.bufB[i] - 128) / 128;
+        sum += v*v;
+      }
+      A.rms = Math.sqrt(sum / A.bufB.length); // だいたい 0.0〜0.2 程度
+      rmsLabel.textContent = A.rms.toFixed(4);
+    }
+
+    // ========= raster wave effect (splat covariances) =========
+    // 強めに動かす。バンドが縦に走り、音量で強さが変わる。
+    function applyRaster(timeMs) {
+      const gs = gvrm.gs;
+      if (!gs || !gs.splatMesh || !gs.splatMesh.material) return;
+
+      const base = gs.splatMesh.splatDataTextures?.baseData;
+      if (!base) return;
+
+      const cov  = base.covariances;  // Float32Array (splatCount * 16)
+      const base0= gs.covariances0;   // コピー元（初期値）
+      const ctr  = base.centers;      // Float32Array (splatCount * 4)
+      if (!cov || !base0 || !ctr) return;
+
+      // パラメータ（大きめ）
+      const t = timeMs * 0.001;
+      const bandSpeed = 0.6;          // バンドの移動速度
+      const spanY     = 2.2;          // ラスタの周期（モデル身長に合わせて調整可）
+      const sigma     = 0.12;         // バンド幅
+      const rmsBoost  = Math.min(A.rms * 24.0, 6.0); // 音量による強さ（強め）
+      const baseGain  = 0.35;         // 常時のうねり
+      const diagIdx0  = 0;            // 対角成分の想定インデックス
+      const diagIdx1  = 5;
+      const diagIdx2  = 10;
+
+      // バンド中心位置（-spanY/2 .. +spanY/2 を往復）
+      const centerY = Math.sin(t * bandSpeed) * (spanY * 0.5);
+
+      // 各スプラット処理
+      // centers は [x,y,z,w]、cov は 4x4 行列を16連続格納
+      const count = gs.splatCount;
+      for (let s = 0; s < count; s++) {
+        const y = ctr[s*4 + 1];
+
+        // ガウス関数で「帯」に強さを乗せる
+        const dy = y - centerY;
+        const band = Math.exp(-(dy*dy) / (2*sigma*sigma)); // 0..1
+        const wobble = baseGain + rmsBoost * band;         // 強いときは大きく
+
+        const i16 = s*16;
+        cov[i16 + diagIdx0] = base0[i16 + diagIdx0] * (1.0 + wobble);
+        cov[i16 + diagIdx1] = base0[i16 + diagIdx1] * (1.0 + wobble);
+        cov[i16 + diagIdx2] = base0[i16 + diagIdx2] * (1.0 + wobble);
+      }
+
+      if (gs.splatMesh.updateDataTexturesFromBaseData) {
+        gs.splatMesh.updateDataTexturesFromBaseData(0, count - 1);
+      }
+
+      // （任意）pointSize があれば揺らす
+      const u = gs.splatMesh.material.uniforms;
+      if (u && u.pointSize) {
+        u.pointSize.value = 2.0 + rmsBoost * 0.6;
+      }
+    }
+
+    // ========= main loop =========
+    renderer.setAnimationLoop((time) => {
+      updateRMS();
+      applyRaster(time);
+      gvrm.update();
+      renderer.render(scene, camera);
+    });
+
+    // 最初のフレームで uniform を一度だけダンプ（確認用）
+    (function tryDumpUniformsOnce(){
+      const gs = gvrm.gs;
+      if (gs?.splatMesh?.material?.uniforms) {
+        console.log("[DEBUG] uniforms snapshot", gs.splatMesh.material.uniforms);
+      } else {
+        requestAnimationFrame(tryDumpUniformsOnce);
+      }
+    })();
+  </script>
+</body>
+</html>

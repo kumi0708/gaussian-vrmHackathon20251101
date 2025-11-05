@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM + nanoKONTROL2 Wave Control</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    #ui {
+      position: fixed;
+      top: 8px; left: 8px;
+      background: rgba(0,0,0,0.6);
+      color: #0f0;
+      font: 12px monospace;
+      padding: 8px 10px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="ui">
+    <div><b>nanoKONTROL2:</b> スライダーで波をコントロール</div>
+    <div>freq: <span id="freqVal">0</span></div>
+    <div>speed: <span id="speedVal">0</span></div>
+    <div>amp: <span id="ampVal">0</span></div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GVRM } from 'gvrm';
+
+    // --- UI elements ---
+    const freqEl = document.getElementById("freqVal");
+    const speedEl = document.getElementById("speedVal");
+    const ampEl = document.getElementById("ampVal");
+
+    // --- 3D setup ---
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+    // --- parameters (MIDI controllable) ---
+    const params = {
+      waveFreq: 15.0,  // スライダー1
+      waveSpeed: 6.0,  // スライダー2
+      amp: 3.0,        // スライダー3
+    };
+
+    // ===== GVRM load =====
+    const gvrm = await GVRM.load('../assets/sample5.gvrm', scene, camera, renderer);
+    await gvrm.changeFBX('../assets/Idle.fbx');
+    console.log("✅ GVRM loaded:", gvrm);
+
+    const gs = gvrm.gs;
+
+    // ===== Web MIDI =====
+    if ("requestMIDIAccess" in navigator) {
+      try {
+        const midi = await navigator.requestMIDIAccess();
+        for (const input of midi.inputs.values()) {
+          if (input.name && input.name.toLowerCase().includes("nanokontrol")) {
+            console.log("🎛 Connected to", input.name);
+            input.onmidimessage = (e) => {
+            const [status, d1, d2] = e.data;
+            const type = status & 0xF0;
+            if (type === 0xB0) { // Control Change
+                const cc = d1;
+                const v = d2 / 127;
+
+                // clamp関数（0を避ける）
+                const clamp = (x, min, max) => Math.max(min, Math.min(max, x));
+
+                if (cc === 0) params.waveFreq = clamp(5 + v * 30, 0.1, 100);  // 最小0.1
+                if (cc === 1) params.waveSpeed = clamp(v * 10, 0.05, 20);     // 最小0.05
+                if (cc === 2) params.amp = clamp(v * 5, 0.1, 10);             // 最小0.1
+
+                freqEl.textContent = params.waveFreq.toFixed(2);
+                speedEl.textContent = params.waveSpeed.toFixed(2);
+                ampEl.textContent = params.amp.toFixed(2);
+            }
+            };
+          }
+        }
+      } catch (err) {
+        console.warn("MIDI access failed:", err);
+      }
+    } else {
+      console.warn("Web MIDI not supported in this browser.");
+    }
+
+    // ===== Animation loop =====
+    renderer.setAnimationLoop((time) => {
+      if (!gs || !gs.splatMesh) return;
+      const baseData = gs.splatMesh.splatDataTextures?.baseData;
+      const cov = baseData?.covariances;
+      const base0 = gs.covariances0;
+      const centers0 = gs.centers0;
+      if (!cov || !base0 || !centers0) return;
+
+      const t = time * 0.001;
+      const { waveFreq, waveSpeed, amp } = params;
+
+      for (let i = 0; i < cov.length; i += 6) {
+        const idx = (i / 6) * 3;
+        const y = centers0[idx + 1];
+        const wave = 1.0 + Math.sin(y * waveFreq + t * waveSpeed) * amp;
+        cov[i + 0] = base0[i + 0] * wave;
+        cov[i + 3] = base0[i + 3] * wave;
+        cov[i + 5] = base0[i + 5] * wave;
+      }
+
+      gs.splatMesh.updateDataTexturesFromBaseData(0, gs.splatCount - 1);
+      gvrm.update();
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>

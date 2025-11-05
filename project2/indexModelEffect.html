@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Model Effect Controller + nanoKEY2</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    #ui {
+      position: fixed;
+      top: 8px; left: 8px;
+      background: rgba(0,0,0,0.6);
+      color: #0f0;
+      font: 12px monospace;
+      padding: 8px 10px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="ui">
+    <div><b>nanoKEY2:</b> C=Wave / D=Noise / E=Breath</div>
+    <div>mode: <span id="modeVal">wave</span></div>
+    <div>freq: <span id="freqVal">0</span></div>
+    <div>speed: <span id="speedVal">0</span></div>
+    <div>amp: <span id="ampVal">0</span></div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { PostEffectController } from "./PostEffectController.js";
+    import { ModelEffectController } from "./ModelEffectController.js";
+
+
+    const ui = {
+      mode: document.getElementById("modeVal"),
+      freq: document.getElementById("freqVal"),
+      speed: document.getElementById("speedVal"),
+      amp: document.getElementById("ampVal")
+    };
+
+    const canvas = document.getElementById("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+    const controller = new ModelEffectController(scene, camera, renderer, ui);
+    const postFx = new PostEffectController(renderer, scene, camera);
+    await controller.loadModel("../assets/sample5.gvrm", "../assets/Idle.fbx");
+  
+    // メインループ
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+        const t = clock.getElapsedTime() * 1000;
+        controller.update(t);
+        postFx.render(clock.getDelta());
+        // renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>

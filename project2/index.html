@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM sample5 viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GVRM } from 'gvrm';
+
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+
+    //
+    // ===== モデルロード後に呼ばれる部分 =====
+const gvrm = await GVRM.load('../assets/sample5.gvrm', scene, camera, renderer);
+await gvrm.changeFBX('../assets/Idle.fbx');
+console.log("✅ GVRM loaded:", gvrm);
+
+// === ロード後の確認タイミング ===
+const gs = gvrm.gs;
+if (gs && gs.splatMesh && gs.splatMesh.material) {
+  console.log("=== [DEBUG] Gaussian-Splats Material Uniforms (load phase) ===");
+  console.log(gs.splatMesh.material.uniforms);
+  console.log("===============================================================");
+} else {
+  console.warn("⚠️ gs.splatMesh.material がまだ初期化されていません。setAnimationLoop 内で再チェックします。");
+}
+
+// ===== 描画ループ =====
+renderer.setAnimationLoop((time) => {
+  const gs = gvrm.gs;
+  if (!gs || !gs.splatMesh || !gs.splatMesh.material) return;
+
+  // 初回だけuniform一覧を出す（1秒以内でも未出力なら出す）
+  if (!window._loggedUniforms && gs.splatMesh.material.uniforms) {
+    console.log("=== [DEBUG] Gaussian-Splats Material Uniforms (first frame) ===");
+    console.log(gs.splatMesh.material.uniforms);
+    console.log("===============================================================");
+    window._loggedUniforms = true;
+  }
+
+  // 呼吸エフェクト
+  const t = Math.sin(time * 0.01);
+  const scale = 1.0 + t * 1.0;
+  const baseData = gs.splatMesh.splatDataTextures?.baseData;
+  const cov = baseData?.covariances;
+  const base0 = gs.covariances0;
+
+//   if (cov && base0) {
+    for (let i = 0; i < cov.length; i++) {
+      cov[i] = base0[i] * scale;
+    }
+    if (gs.splatMesh.updateDataTexturesFromBaseData) {
+    //   gs.splatMesh.updateDataTexturesFromBaseData(0, gs.splatCount - 1);
+    }
+
+    // pointSize を直接揺らす（uniformが存在すれば）
+    // const u = gs.splatMesh.material.uniforms;
+    // if (u && u.pointSize) {
+    //   u.pointSize.value = 2.0 + t * 1.0;
+    // }
+//   }
+
+  gs.splatMesh.updateDataTexturesFromBaseData(0, gs.splatCount - 1);
+  gvrm.update();
+  renderer.render(scene, camera);
+});
+  </script>
+</body>
+</html>

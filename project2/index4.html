@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gaussian-VRM sample5 viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.js",
+      "gaussian-splats-3d": "https://naruya.github.io/gs-edit/lib/gaussian-splats-3d.module.js",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+      "gvrm": "https://naruya.github.io/gs-edit/lib/gaussian-vrm.min.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GVRM } from 'gvrm';
+
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 0.4, 1.5);
+
+
+    //
+    // ===== モデルロード後に呼ばれる部分 =====
+const gvrm = await GVRM.load('../assets/sample5.gvrm', scene, camera, renderer);
+await gvrm.changeFBX('../assets/Idle.fbx');
+console.log("✅ GVRM loaded:", gvrm);
+
+// === ロード後の確認タイミング ===
+const gs = gvrm.gs;
+if (gs && gs.splatMesh && gs.splatMesh.material) {
+  console.log("=== [DEBUG] Gaussian-Splats Material Uniforms (load phase) ===");
+  console.log(gs.splatMesh.material.uniforms);
+  console.log("===============================================================");
+} else {
+  console.warn("⚠️ gs.splatMesh.material がまだ初期化されていません。setAnimationLoop 内で再チェックします。");
+}
+
+// === Audio setup ===
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+const analyser = audioCtx.createAnalyser();
+analyser.fftSize = 1024;
+const floatArray = new Float32Array(analyser.fftSize);
+const byteArray = new Uint8Array(analyser.fftSize);
+let useFloat = true;
+
+const deviceId = "communications"; // 通信デバイスを指定！
+// const deviceId = "default"; // 通信デバイスを指定！
+
+async function setupAudioInput() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: { exact: deviceId },
+        channelCount: 2,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    });
+    console.log("[DEBUG] Stream tracks:", stream.getAudioTracks());
+
+    const src = audioCtx.createMediaStreamSource(stream);
+    const splitter = audioCtx.createChannelSplitter(2);
+    const merger = audioCtx.createChannelMerger(1);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 3.0;
+
+    src.connect(splitter);
+    splitter.connect(merger, 0, 0);
+    splitter.connect(merger, 1, 0);
+    merger.connect(gainNode);
+    gainNode.connect(analyser);
+
+    console.log("[DEBUG] Microphone connected: communications (Intel Smart Sound)");
+  } catch (err) {
+    console.error("[ERROR] Audio setup failed:", err);
+  }
+}
+
+
+
+// resumeが必要（Chromeの仕様）
+window.addEventListener("click", async () => {
+  if (audioCtx.state === "suspended") {
+    await audioCtx.resume();
+    console.log("[DEBUG] AudioContext resumed, state:", audioCtx.state);
+  }
+});
+
+await setupAudioInput();
+
+navigator.mediaDevices.enumerateDevices().then(devices => {
+  devices
+    .filter(d => d.kind === 'audioinput')
+    .forEach((d, i) => {
+      console.log(`[DEBUG] Input #${i} → label="${d.label}" id=${d.deviceId}`);
+    });
+});
+
+// === Pulse control variables ===
+let wavePulse = 0;
+let waveDecay = 0.92;
+let smoothedRms = 0;
+let zeroCount = 0; // デバッグ用
+
+// === Main render loop ===
+renderer.setAnimationLoop((time) => {
+  const gs = gvrm.gs;
+  if (!gs || !gs.splatMesh) return;
+
+  let rms = 0;
+
+  // --- 波形取得 ---
+  analyser.getFloatTimeDomainData(floatArray);
+  const isSilent = floatArray.every(v => v === 0);
+
+  if (isSilent) {
+    zeroCount++;
+    if (zeroCount > 30) {
+      useFloat = false;
+      // console.warn("[DEBUG] FloatTimeDomainData is silent → switch to ByteTimeDomainData");
+    }
+  }
+
+  if (useFloat) {
+    let sum = 0;
+    for (let i = 0; i < floatArray.length; i++) sum += floatArray[i] * floatArray[i];
+    rms = Math.sqrt(sum / floatArray.length);
+  } else {
+    analyser.getByteTimeDomainData(byteArray);
+    let sum = 0;
+    for (let i = 0; i < byteArray.length; i++) {
+      const v = (byteArray[i] - 128) / 128.0;
+      sum += v * v;
+    }
+    rms = Math.sqrt(sum / byteArray.length);
+  }
+
+  smoothedRms = smoothedRms * 0.8 + rms * 0.2;
+  const boosted = Math.min(smoothedRms * 40.0, 1.0);
+  wavePulse = wavePulse * waveDecay + boosted * 4.0;
+
+  if (Math.floor(time) % 2000 < 16)
+    console.log("[DEBUG] rms=" + rms.toFixed(4) + " boosted=" + boosted.toFixed(3) + " pulse=" + wavePulse.toFixed(2) + " floatMode=" + useFloat);
+
+  // --- waveエフェクト ---
+  const baseData = gs.splatMesh.splatDataTextures?.baseData;
+  const cov = baseData?.covariances;
+  const base0 = gs.covariances0;
+  const centers0 = gs.centers0;
+  if (!cov || !base0 || !centers0) return;
+
+  const t = time * 0.001;
+  const waveFreq = 12.0;
+  const waveSpeed = 8.0;
+  const amp = wavePulse * 10.0;
+
+  for (let i = 0; i < cov.length; i += 6) {
+    const idx = (i / 6) * 3;
+    const y = centers0[idx + 1];
+    const wave = 1.0 + Math.sin((y * waveFreq) - (t * waveSpeed)) * amp;
+    cov[i + 0] = base0[i + 0] * wave;
+    cov[i + 3] = base0[i + 3] * wave;
+    cov[i + 5] = base0[i + 5] * wave;
+  }
+
+  gs.splatMesh.updateDataTexturesFromBaseData(0, gs.splatCount - 1);
+  gvrm.update();
+  renderer.render(scene, camera);
+});
+
+
+
+
+  </script>
+</body>
+</html>
